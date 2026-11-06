@@ -1,30 +1,37 @@
-﻿using System.Text.Json.Serialization;
+﻿
+using System.Text.Json.Serialization;
 using WebApi.Helpers;
 using WebApi.Repositories;
 using WebApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// add services to DI container
+// Add services to DI container
 {
     var services = builder.Services;
-    var env = builder.Environment;
- 
+
     services.AddCors();
+
     services.AddControllers().AddJsonOptions(x =>
     {
-        // serialize enums as strings in api responses (e.g. Role)
-        x.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        // Serialize enums as strings
+        x.JsonSerializerOptions.Converters.Add(
+            new JsonStringEnumConverter()
+        );
 
-        // ignore omitted parameters on models to enable optional params (e.g. User update)
-        x.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+        // Ignore null properties
+        x.JsonSerializerOptions.DefaultIgnoreCondition =
+            JsonIgnoreCondition.WhenWritingNull;
     });
+
     services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
 
-    // configure strongly typed settings object
-    services.Configure<DbSettings>(builder.Configuration.GetSection("DbSettings"));
+    // Configure PostgreSQL settings
+    services.Configure<DbSettings>(
+        builder.Configuration.GetSection("DbSettings")
+    );
 
-    // configure DI for application services
+    // Dependency injection
     services.AddSingleton<DataContext>();
     services.AddScoped<IUserRepository, UserRepository>();
     services.AddScoped<IUserService, UserService>();
@@ -32,25 +39,27 @@ var builder = WebApplication.CreateBuilder(args);
 
 var app = builder.Build();
 
-// ensure database and tables exist
+// Initialize PostgreSQL database and tables
 {
     using var scope = app.Services.CreateScope();
-    var context = scope.ServiceProvider.GetRequiredService<DataContext>();
+
+    var context = scope.ServiceProvider
+        .GetRequiredService<DataContext>();
+
     await context.Init();
 }
 
-// configure HTTP request pipeline
+// Configure HTTP request pipeline
 {
-    // global cors policy
     app.UseCors(x => x
         .AllowAnyOrigin()
         .AllowAnyMethod()
         .AllowAnyHeader());
 
-    // global error handler
     app.UseMiddleware<ErrorHandlerMiddleware>();
 
     app.MapControllers();
 }
 
-app.Run("http://localhost:4000");
+// Listen on port 4000
+app.Run("http://0.0.0.0:4000");

@@ -1,3 +1,4 @@
+
 namespace WebApi.Helpers;
 
 using System.Data;
@@ -7,17 +8,37 @@ using Npgsql;
 
 public class DataContext
 {
-    private DbSettings _dbSettings;
+    private readonly DbSettings _dbSettings;
 
     public DataContext(IOptions<DbSettings> dbSettings)
     {
         _dbSettings = dbSettings.Value;
     }
 
+    // Create connection using Patroni-aware primary selection
+    private NpgsqlConnection CreatePostgresConnection(string database)
+    {
+        var builder = new NpgsqlConnectionStringBuilder
+        {
+            Host = _dbSettings.Hosts,
+            Database = database,
+            Username = _dbSettings.UserId,
+            Password = _dbSettings.Password,
+
+            // Only connect to a writable PostgreSQL primary
+            TargetSessionAttributes = "read-write",
+
+            Timeout = 5,
+            CommandTimeout = 30,
+            Pooling = true
+        };
+
+        return new NpgsqlConnection(builder.ConnectionString);
+    }
+
     public IDbConnection CreateConnection()
     {
-        var connectionString = $"Host={_dbSettings.Server}; Database={_dbSettings.Database}; Username={_dbSettings.UserId}; Password={_dbSettings.Password};";
-        return new NpgsqlConnection(connectionString);
+        return CreatePostgresConnection(_dbSettings.Database);
     }
 
     public async Task Init()
@@ -28,38 +49,52 @@ public class DataContext
 
     private async Task _initDatabase()
     {
-        // create database if it doesn't exist
-        var connectionString = $"Host={_dbSettings.Server}; Database=postgres; Username={_dbSettings.UserId}; Password={_dbSettings.Password};";
-        using var connection = new NpgsqlConnection(connectionString);
-        var sqlDbCount = $"SELECT COUNT(*) FROM pg_database WHERE datname = '{_dbSettings.Database}';";
-        var dbCount = await connection.ExecuteScalarAsync<int>(sqlDbCount);
+        using var connection =
+            CreatePostgresConnection("postgres");
+
+        await connection.OpenAsync();
+
+        var sqlDbCount = """
+            SELECT COUNT(*)
+            FROM pg_database
+            WHERE datname = @Database;
+            """;
+
+        var dbCount = await connection.ExecuteScalarAsync<int>(
+            sqlDbCount,
+            new { Database = _dbSettings.Database }
+        );
+
         if (dbCount == 0)
         {
-            var sql = $"CREATE DATABASE \"{_dbSettings.Database}\"";
+            var databaseName =
+                _dbSettings.Database.Replace("\"", "\"\"");
+
+            var sql = $"CREATE DATABASE \"{databaseName}\"";
+
             await connection.ExecuteAsync(sql);
         }
     }
 
     private async Task _initTables()
     {
-        // create tables if they don't exist
-        using var connection = CreateConnection();
-        await _initUsers();
+        using var connection =
+            CreatePostgresConnection(_dbSettings.Database);
 
-        async Task _initUsers()
-        {
-            var sql = """
-                CREATE TABLE IF NOT EXISTS Users (
-                    Id SERIAL PRIMARY KEY,
-                    Title VARCHAR,
-                    FirstName VARCHAR,
-                    LastName VARCHAR,
-                    Email VARCHAR,
-                    Role INTEGER,
-                    PasswordHash VARCHAR
-                );
+        await connection.OpenAsync();
+
+        var sql = """
+            CREATE TABLE IF NOT EXISTS Users (
+                Id SERIAL PRIMARY KEY,
+                Title VARCHAR,
+                FirstName VARCHAR,
+                LastName VARCHAR,
+                Email VARCHAR,
+                Role INTEGER,
+                PasswordHash VARCHAR
+            );
             """;
-            await connection.ExecuteAsync(sql);
-        }
+
+        await connection.ExecuteAsync(sql);
     }
 }
